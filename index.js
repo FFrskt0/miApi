@@ -1,95 +1,252 @@
 const express = require('express');
 const cors = require('cors');
-const db = require('./config/db');
-const sequelize = require('./config/db');
 require('dotenv').config();
 
-// Importar Modelos para que Sequelize los registre
-const Producto = require('./models/Producto');
+const {
+    sequelize,
+    Categoria,
+    Proveedor,
+    Usuario,
+    Producto,
+    Movimiento
+} = require('./models');
 
 const app = express();
 
-// --- MIDDLEWARES ---
-// Habilitar CORS para permitir peticiones desde el frontend (React)
 app.use(cors());
-// Parsear el body de las peticiones a JSON
 app.use(express.json());
 
-// --- RUTAS BÁSICAS DE PRUEBA ---
-app.get('/', (req, res) => {
-    res.send('¡API Backend funcionando exitosamente!');
+// --- ENDPOINT DASHBOARD (KPIs) ---
+app.get('/dashboard', async (req, res) => {
+    try {
+        const totalProductos = await Producto.count();
+        const totalCategorias = await Categoria.count();
+        const totalProveedores = await Proveedor.count();
+        const bajoStock = await Producto.count({
+            where: {
+                stock: { [sequelize.Sequelize.Op.lte]: 5 }
+            }
+        });
+
+        const movimientosRecientes = await Movimiento.findAll({
+            limit: 5,
+            order: [['fecha_hora', 'DESC']],
+            include: [
+                { model: Producto, as: 'producto', attributes: ['nombre'] },
+                { model: Usuario, as: 'usuario', attributes: ['nombre'] }
+            ]
+        });
+
+        res.json({
+            totalProductos,
+            totalCategorias,
+            totalProveedores,
+            bajoStock,
+            movimientosRecientes
+        });
+    } catch (error) {
+        console.error('Error al cargar dashboard:', error);
+        res.status(500).json({ error: 'Error al cargar dashboard' });
+    }
 });
 
-// --- RUTAS DE PRODUCTOS (CRUD) ---
+// --- CRUD CATEGORIAS ---
+app.get('/categorias', async (req, res) => {
+    try {
+        const categorias = await Categoria.findAll();
+        res.json(categorias);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
-// 1. Obtener todos los productos (GET)
+app.post('/categorias', async (req, res) => {
+    try {
+        const categoria = await Categoria.create(req.body);
+        res.status(201).json(categoria);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/categorias/:id', async (req, res) => {
+    try {
+        const categoria = await Categoria.findByPk(req.params.id);
+        if (!categoria) return res.status(404).json({ error: 'Categoría no encontrada' });
+        await categoria.update(req.body);
+        res.json(categoria);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+
+app.delete('/categorias/:id', async (req, res) => {
+    try {
+        const categoria = await Categoria.findByPk(req.params.id);
+        if (!categoria) return res.status(404).json({ error: 'Categoría no encontrada' });
+        await categoria.destroy();
+        res.json({ mensaje: 'Categoría eliminada' });
+    } catch (error) {
+        res.status(400).json({ error: 'No se pudo eliminar la categoría. Puede estar asignada a productos.' });
+    }
+});
+
+// --- CRUD PROVEEDORES ---
+app.get('/proveedores', async (req, res) => {
+    try {
+        const proveedores = await Proveedor.findAll();
+        res.json(proveedores);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/proveedores', async (req, res) => {
+    try {
+        const proveedor = await Proveedor.create(req.body);
+        res.status(201).json(proveedor);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- CRUD USUARIOS ---
+app.get('/usuarios', async (req, res) => {
+    try {
+        const usuarios = await Usuario.findAll({
+            attributes: { exclude: ['password'] }
+        });
+        res.json(usuarios);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/usuarios', async (req, res) => {
+    try {
+        const usuario = await Usuario.create(req.body);
+        res.status(201).json(usuario);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- CRUD PRODUCTOS (Con include de Categoría) ---
 app.get('/productos', async (req, res) => {
     try {
-        const productos = await Producto.findAll();
-        res.status(200).json(productos);
+        const productos = await Producto.findAll({
+            include: [
+                { model: Categoria, as: 'categoria', attributes: ['id', 'nombre'] },
+                { model: Proveedor, as: 'proveedor', attributes: ['id', 'razon_social'] }
+            ]
+        });
+        res.json(productos);
     } catch (error) {
-        console.error('Error al obtener productos:', error);
-        res.status(500).json({ error: 'Error al obtener productos' });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// 2. Guardar un nuevo producto (POST)
 app.post('/productos', async (req, res) => {
     try {
-        const nuevoProducto = await Producto.create(req.body);
-        res.status(201).json(nuevoProducto);
+        const producto = await Producto.create(req.body);
+        res.status(201).json(producto);
     } catch (error) {
-        console.error('Error al guardar producto:', error);
-        res.status(500).json({ error: 'Error al guardar el producto' });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// 3. Actualizar un producto existente (PUT)
 app.put('/productos/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const [filasAfectadas] = await Producto.update(req.body, {
-            where: { id: id }
-        });
-
-        if (filasAfectadas === 0) {
-            return res.status(404).json({ error: 'Producto no encontrado' });
-        }
-
-        const productoActualizado = await Producto.findByPk(id);
-        res.status(200).json(productoActualizado);
+        await Producto.update(req.body, { where: { id } });
+        const actualizado = await Producto.findByPk(id);
+        res.json(actualizado);
     } catch (error) {
-        console.error('Error al actualizar producto:', error);
-        res.status(500).json({ error: 'Error al actualizar el producto' });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// 4. Eliminar un producto (DELETE)
 app.delete('/productos/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const eliminado = await Producto.destroy({
-            where: { id: id }
-        });
-
-        if (!eliminado) {
-            return res.status(404).json({ error: 'Producto no encontrado' });
-        }
-
-        res.status(200).json({ mensaje: 'Producto eliminado correctamente' });
+        await Producto.destroy({ where: { id } });
+        res.json({ mensaje: 'Producto eliminado' });
     } catch (error) {
-        console.error('Error al eliminar producto:', error);
-        res.status(500).json({ error: 'Error al eliminar el producto' });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// --- SINCRONIZACIÓN Y ARRANQUE ---
+// --- KARDEX / MOVIMIENTOS (TRANSACCIÓN ATÓMICA) ---
+app.get('/movimientos', async (req, res) => {
+    try {
+        const movimientos = await Movimiento.findAll({
+            order: [['fecha_hora', 'DESC']],
+            include: [
+                { model: Producto, as: 'producto', attributes: ['id', 'nombre'] },
+                { model: Usuario, as: 'usuario', attributes: ['id', 'nombre'] }
+            ]
+        });
+        res.json(movimientos);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/movimientos', async (req, res) => {
+    const t = await sequelize.transaction();
+
+    try {
+        const { producto_id, usuario_id, tipo_movimiento, cantidad, observaciones } = req.body;
+        const cant = parseInt(cantidad, 10);
+
+        const producto = await Producto.findByPk(producto_id, { transaction: t });
+        if (!producto) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Producto no encontrado' });
+        }
+
+        // Calcular nuevo stock según tipo de movimiento
+        let nuevoStock = producto.stock;
+        if (tipo_movimiento === 'Entrada') {
+            nuevoStock += cant;
+        } else if (tipo_movimiento === 'Salida') {
+            if (producto.stock < cant) {
+                await t.rollback();
+                return res.status(400).json({ error: 'Stock insuficiente para realizar la salida' });
+            }
+            nuevoStock -= cant;
+        } else if (tipo_movimiento === 'Ajuste') {
+            nuevoStock = cant;
+        }
+
+        // 1. Registrar movimiento en Kardex
+        const movimiento = await Movimiento.create({
+            producto_id,
+            usuario_id,
+            tipo_movimiento,
+            cantidad: cant,
+            observaciones
+        }, { transaction: t });
+
+        // 2. Actualizar stock en la tabla de productos
+        await producto.update({ stock: nuevoStock }, { transaction: t });
+
+        // Confirmar transacción
+        await t.commit();
+        res.status(201).json(movimiento);
+    } catch (error) {
+        await t.rollback();
+        console.error('Error en transacción de Kardex:', error);
+        res.status(500).json({ error: 'Error al procesar el movimiento de inventario' });
+    }
+});
+
+// --- ARRANQUE Y SINCRONIZACIÓN CON HEIDISQL ---
 const PORT = process.env.PORT || 3006;
 
-// force: false evita que se borren los datos cada vez que se reinicia el servidor
-sequelize.sync({ force: false })
+sequelize.sync({ alter: true })
     .then(() => {
-        console.log('Base de datos conectada y sincronizada.');
+        console.log('Tablas sincronizadas con HeidiSQL.');
         app.listen(PORT, () => {
             console.log(`Servidor corriendo en http://localhost:${PORT}`);
         });
